@@ -1,0 +1,231 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  olist-challenge
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: olist-challenge
+  ExractorDestination:
+    Type: String
+    Default: /home/ubuntu/extractor/app.py
+  RawBucketName:
+    Type: String
+    Default: alh-olist-challenge-raw
+  ProcessedBucketName:
+    Type: String
+    Default: alh-olist-challenge-processed2
+
+  WorkBucket:
+    Type: String
+  ExtractorJobLocation:
+    Type: String
+  TransformationsJobLocation:
+    Type: String
+  EtlModulesLocation:
+    Type: String
+
+Resources:
+  SSHInstanceGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+
+  S3AccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+  UserDataPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: S3AccessPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+        - Effect: Allow
+          Action: s3:ListAllMyBuckets
+          Resource: !Sub arn:aws:s3:::* 
+        - Effect: Allow
+          Action: s3:*
+          Resource:
+            - !Sub arn:aws:s3:::${WorkBucket}
+            - !Sub arn:aws:s3:::${WorkBucket}/*
+            - !Sub arn:aws:s3:::${RawBucketName}
+            - !Sub arn:aws:s3:::${RawBucketName}/*
+      Roles:
+        - !Ref S3AccessRole
+  
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles:
+        - !Ref S3AccessRole
+
+  ExtractorInstance:
+    Type: AWS::EC2::Instance
+    Properties: 
+      ImageId: ami-04b9e92b5572fa0d1 # us-east-1 only
+      InstanceType: t2.micro
+      KeyName: !Ref KeyPairName
+      SecurityGroups: 
+        - !Ref SSHInstanceGroup
+      IamInstanceProfile: !Ref InstanceProfile
+      UserData:
+        Fn::Base64:
+          !Sub |
+            #!/bin/bash
+            mkdir /home/ubuntu/extractor
+            sudo apt update
+            sudo apt install awscli -y
+            aws s3 cp ${ExtractorJobLocation} ${ExractorDestination}
+            echo ${RawBucketName} >> dest_bucket
+            python3 ${ExractorDestination} ${RawBucketName}
+
+  RawBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref RawBucketName
+
+  ProcessedBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ProcessedBucketName
+      
+  GlueAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - glue.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSGlueServiceRole
+      Policies:
+        - PolicyName: S3CrawlerPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::${WorkBucket}
+                  - !Sub arn:aws:s3:::${WorkBucket}/*
+                  - !Sub arn:aws:s3:::${RawBucketName}
+                  - !Sub arn:aws:s3:::${RawBucketName}/*
+                  - !Sub arn:aws:s3:::${ProcessedBucketName}
+                  - !Sub arn:aws:s3:::${ProcessedBucketName}/*
+  
+  TransformationsJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: transformations
+      Role: !Ref GlueAccessRole
+      Command:   
+        Name: pythonshell
+        PythonVersion: 3
+        ScriptLocation: !Ref TransformationsJobLocation
+      DefaultArguments:
+        '--input_bucket': !Ref RawBucketName
+        '--output_bucket': !Ref ProcessedBucketName
+        '--extra-py-files': !Ref EtlModulesLocation
+      GlueVersion: 1.0
+      
+  StartWorkflowFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: start-workflow/
+      Handler: app.lambda_handler
+      Runtime: python3.7
+      Environment:
+        Variables:
+          WORKFLOW_NAME: !Ref EtlWorkflow
+          #JOB_ARGS: !Sub "{\"--input_bucket\": \"${RawBucketName}\", \"--output_bucket\":\"${ProcessedBucketName}\"}"
+      Events:
+        S3CreateObject:
+          Type: S3
+          Properties:
+            Bucket: !Ref RawBucket
+            Events: s3:ObjectCreated:*
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: suffix
+                    Value: SUCCESS_
+      Policies:
+        - S3ReadPolicy:
+            BucketName: !Ref RawBucketName
+        - Statement:
+          - Effect: Allow
+            Action:
+              - glue:*
+            Resource: '*'
+
+  EtlWorkflow:
+    Type: AWS::Glue::Workflow
+    Properties: 
+      Name: etl-workflow
+
+  TransformationsTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: transformations-trigger
+      Type: ON_DEMAND
+      WorkflowName: !Ref EtlWorkflow
+      Actions:
+        - JobName: !Ref TransformationsJob
+          Arguments:
+            '--input_bucket': !Ref RawBucketName
+            '--output_bucket': !Ref ProcessedBucketName
+            '--extra-py-files': !Ref EtlModulesLocation
+
+  CrawlerTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: crawler-trigger
+      Type: CONDITIONAL
+      WorkflowName: !Ref EtlWorkflow
+      StartOnCreation: true
+      Actions:
+        - CrawlerName: !Ref DataCatalogCrawler
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            JobName: !Ref TransformationsJob
+            State: SUCCEEDED
+
+  OlistDatabase:
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: olist-db
+  
+  DataCatalogCrawler:
+    Type: AWS::Glue::Crawler
+    Properties:
+      Name: data-catalog-crawler
+      Role: !Ref GlueAccessRole
+      DatabaseName: !Ref OlistDatabase
+      Targets: 
+        S3Targets:
+          - Path: !Sub s3://${ProcessedBucketName}
