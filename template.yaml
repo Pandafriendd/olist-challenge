@@ -229,3 +229,43 @@ Resources:
       Targets: 
         S3Targets:
           - Path: !Sub s3://${ProcessedBucketName}
+
+  SalesCluster:  
+    Type: AWS::Redshift::Cluster
+    Properties: 
+      ClusterIdentifier: sales-cluster-1
+      ClusterType: single-node
+      DBName: dev
+      IamRoles: 
+        - !GetAtt [ RedshiftSpectrumRole, Arn ]
+      MasterUserPassword: Test2020
+      MasterUsername: awsuser
+      NodeType: dc2.large
+      Port: 5439
+      PubliclyAccessible: false
+
+  RedshiftSpectrumRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - redshift.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSGlueConsoleFullAccess
+      Policies:
+        - PolicyName: S3AccessPolicy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub arn:aws:s3:::${ProcessedBucketName}
+                  - !Sub arn:aws:s3:::${ProcessedBucketName}/*

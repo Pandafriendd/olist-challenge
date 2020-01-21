@@ -32,8 +32,16 @@ contents = resp['Contents']
 for content in contents:
     df = pd.read_csv(f's3://{args["input_bucket"]}/{content["Key"]}')
 
+    # Rules for reviews dataset
+    #  - Format comments with multiple lines and comma
+    #  - Exclude unnamed fields 
     if 'order_reviews' in content['Key']:
         df = format_review_comments(df)
+
+    # Rules for sellers
+    #  - Exclude unnecessary columns
+    if 'sellers' in content['Key']:
+        df = df.drop(['seller_city', 'seller_state'], axis=1)
 
     new_key = f'{content["Key"].rsplit(".", 1)[0]}.parquet'
     df.to_parquet(f's3://{args["output_bucket"]}/{new_key}')
