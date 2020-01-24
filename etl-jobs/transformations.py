@@ -38,10 +38,9 @@ for content in contents:
     if 'order_reviews' in content['Key']:
         df = format_review_comments(df)
 
-    # Rules for sellers
-    #  - Exclude unnecessary columns
-    if 'sellers' in content['Key']:
-        df = df.drop(['seller_city', 'seller_state'], axis=1)
+    # Fix product's typo
+    if 'products' in content['Key']:
+        df = df.rename(columns={'product_name_lenght':'product_name_length', 'product_description_lenght':'product_description_length'})
 
     new_key = f'{content["Key"].rsplit(".", 1)[0]}.parquet'
     df.to_parquet(f's3://{args["output_bucket"]}/{new_key}')

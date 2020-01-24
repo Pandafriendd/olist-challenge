@@ -9,10 +9,10 @@ Parameters:
     Default: olist-challenge
   ExractorDestination:
     Type: String
-    Default: /home/ubuntu/extractor/app.py
+    Default: /home/ubuntu/etl-jobs/extractor.py
   RawBucketName:
     Type: String
-    Default: alh-olist-challenge-raw
+    Default: alh-olist-challenge-raw2
   ProcessedBucketName:
     Type: String
     Default: alh-olist-challenge-processed2
@@ -25,6 +25,24 @@ Parameters:
     Type: String
   EtlModulesLocation:
     Type: String
+  LoadRedshiftLocation:
+    Type: String
+  GlueSubnet:
+    Type: String
+  GlueSecurityGroup:
+    Type: String
+  GlueAZ:
+    Type: String
+
+  DbName:
+    Type: String
+    Default: dev
+  DbUser:
+    Type: String
+    Default: awsuser
+  DbPassword:
+    Type: String
+    Default: Test2020  
 
 Resources:
   SSHInstanceGroup:
@@ -88,7 +106,6 @@ Resources:
         Fn::Base64:
           !Sub |
             #!/bin/bash
-            mkdir /home/ubuntu/extractor
             sudo apt update
             sudo apt install awscli -y
             aws s3 cp ${ExtractorJobLocation} ${ExractorDestination}
@@ -159,7 +176,6 @@ Resources:
       Environment:
         Variables:
           WORKFLOW_NAME: !Ref EtlWorkflow
-          #JOB_ARGS: !Sub "{\"--input_bucket\": \"${RawBucketName}\", \"--output_bucket\":\"${ProcessedBucketName}\"}"
       Events:
         S3CreateObject:
           Type: S3
@@ -213,12 +229,35 @@ Resources:
             JobName: !Ref TransformationsJob
             State: SUCCEEDED
 
+  LoadRedshiftTrigger:
+    Type: AWS::Glue::Trigger
+    Properties:
+      Name: load-redshift-trigger
+      Type: CONDITIONAL
+      WorkflowName: !Ref EtlWorkflow
+      StartOnCreation: true
+      Actions:
+        - JobName: !Ref LoadRedshiftJob
+          Arguments:
+            '--db_name': !Ref DbName
+            '--host': !GetAtt SalesCluster.Endpoint.Address
+            '--port': !GetAtt SalesCluster.Endpoint.Port
+            '--user': !Ref DbUser
+            '--password': !Ref DbPassword
+            '--glue_db': !Ref OlistDatabase
+            '--iam_role': !GetAtt [ RedshiftSpectrumRole, Arn ]
+      Predicate:
+        Conditions:
+          - LogicalOperator: EQUALS
+            CrawlerName: !Ref DataCatalogCrawler
+            CrawlState: SUCCEEDED
+
   OlistDatabase:
     Type: AWS::Glue::Database
     Properties:
       CatalogId: !Ref AWS::AccountId
       DatabaseInput:
-        Name: olist-db
+        Name: olist_db
   
   DataCatalogCrawler:
     Type: AWS::Glue::Crawler
@@ -235,11 +274,11 @@ Resources:
     Properties: 
       ClusterIdentifier: sales-cluster-1
       ClusterType: single-node
-      DBName: dev
+      DBName: !Ref DbName
       IamRoles: 
         - !GetAtt [ RedshiftSpectrumRole, Arn ]
-      MasterUserPassword: Test2020
-      MasterUsername: awsuser
+      MasterUserPassword: !Ref DbPassword
+      MasterUsername: !Ref DbUser
       NodeType: dc2.large
       Port: 5439
       PubliclyAccessible: false
@@ -269,3 +308,44 @@ Resources:
                 Resource:
                   - !Sub arn:aws:s3:::${ProcessedBucketName}
                   - !Sub arn:aws:s3:::${ProcessedBucketName}/*
+
+  LoadRedshiftJob:
+    Type: AWS::Glue::Job
+    Properties:
+      Name: load-redshift
+      Role: !Ref GlueAccessRole
+      Command:   
+        Name: pythonshell
+        PythonVersion: 3
+        ScriptLocation: !Ref LoadRedshiftLocation
+      Connections:
+        Connections:
+          - !Ref RedshiftConnection
+      DefaultArguments:
+        '--db_name': !Ref DbName
+        '--host': !GetAtt SalesCluster.Endpoint.Address
+        '--port': !GetAtt SalesCluster.Endpoint.Port
+        '--user': !Ref DbUser
+        '--password': !Ref DbPassword
+        '--glue_db': !Ref OlistDatabase
+        '--iam_role': !GetAtt [ RedshiftSpectrumRole, Arn ]
+      GlueVersion: 1.0
+
+  RedshiftConnection:
+    Type: AWS::Glue::Connection
+    Properties: 
+      CatalogId: !Ref AWS::AccountId
+      ConnectionInput:
+        Description: JDBC Connection to my redshift
+        ConnectionType: JDBC
+        PhysicalConnectionRequirements:
+          AvailabilityZone: !Ref GlueAZ
+          SecurityGroupIdList: 
+            - !Ref GlueSecurityGroup
+          SubnetId: !Ref GlueSubnet
+        ConnectionProperties:
+          'JDBC_CONNECTION_URL': !Sub jdbc:redshift://${SalesCluster.Endpoint.Address}:${SalesCluster.Endpoint.Port}/${DbName}
+          'USERNAME': !Ref DbUser
+          'PASSWORD': !Ref DbPassword
+          'JDBC_ENFORCE_SSL': false
+        Name: redshift-connection
