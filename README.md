@@ -22,4 +22,27 @@ Esse trabalho tem por objetivo mostrar um *pipeline* de dados que foi implementa
 
 A visão geral da arquitetura consiste em DL contendo as três camadas. O primeiro componente da arquitetura é um processo que realizar o download e a transfência dos dados para o data lake. As operações e transferência os dados através das camadas é realizada por um orquestrador de *pipeline* de dados. Outro componente da arquitetura é um catálogo dos dados com o objetivo de visualizar de que forma as informações estão estruturadas. Finalmente, o último componente da solução é um DM que foi criado com o objetivo de mostrar as vendas realizada.
 
-A arquitetura da solução pode ser vista na Figura 1. O modelo consiste em um DL, onde um bucket do Amazon S3 é utilizado para a camada *raw* e outro para a *trusted*.
+A arquitetura da solução pode ser vista na Figura 1. O primeiro passo é realizar o download dos arquivos do GitHub. Para isso é utilizado uma instância do Amazon EC2. Essa instância possui um [script Python](/etl-jobs/extractor.py) que faz o download e faz o envio para um *bucket* no Amazon S3 que representa a camada *raw* do DL.
+
+![Arquitetura do pipeline de dados](docs/arch.svg)
+
+O *bucket raw* possui um evento que dispara uma [função do Amazon Lambda](/start-workflow), uma vez que o upload para o *raw* é finalizado. Essa função tem por objetivo executar o ETL, que é orquestrado pelo Workflow do serviço Glue. 
+
+O *dataset* de *reviews* dos usuários possui uma coluna onde há textos com vírgulas, que é o mesmo caractere utilizado como separador das colunas. Isso estava provocando um deslocamento dos dados, a partir de uma vírgula do texto. Para formatar as colunas da forma correta, o primeiro processo do workflow do Glue é [um Job](/etl-jobs/transformations.py) que realiza essa correção. Além disso, o mesmo Job faz uma pequena correção no nome de uma coluna do *dataset* de produtos. Finalmente, os arquivos são convertidos para o formato parquet e salvos em outro *bucket* que representa a camada *trusted* do DL.
+
+O segundo componente do *Workflow* é um *Crawler* do Glue para extrair os metadados dos arquivos e criar o catálogo dos dos, que por sua vez são acessados disponibilizados no Amazon Athena. O Amazon Athena é um serviço que disponibiliza uma interface para consultas dos dados no S3 utilizando SQL.
+
+O último processo do *Workflow* é [um Job](/etl-jobs/load_redshift.py) que cria a estrutura e carrega os dados no Redshift, que é um DM de vendas e representa a camada *trusted* do DL. A primeira operação do Job é criar (se não existe) dois schemas, um externo para consultar os dados da *refined* através do catálogo, e o outro é o schema que segue um modelo dimensional das vendas e tem o objetivo de servir os clientes do *pipeline*.
+
+As dimensões do modelo são o *time*, *date*, *customer*, *location*, *product* e *seller* e as tabelas são criadas pelo Job, caso não existam. O último passo do Job é transferir os dados da estrutura relacional da camada *trusted* para a estrutura dimensional da camada *trusted*.
+
+### 3. Subir o data pipeline
+
+Para provisionar os recursos necessários para o data pipeline na nuvem da AWS é necessário seguir os seguintes passos:
+ - No serviço VPC, criar um Endpoint para o serviço Amazon S3, informando a VPC e a Route Table que realiza as rotas das subnets contidas na VPC;
+ - Criar ou utilizar um *bucket* existente do S3 para armazenamento dos scripts necessários para rodar o pipeline;
+ - Executar o script [build-deploy.sh](build-deploy.sh) informando o *bucket* dos scripts, uma subnet da VPC padrão, o *Security Group* padrão e uma *Availability Zone*. Exemplo:
+ 
+```$ bash build-deploy.sh olist-challenge-deployments subnet-xxxxxxxx sg-xxxxxxxx us-east-1a```
+
+> O pipeline só está disponível para a região North Virginia (us-east-1)
