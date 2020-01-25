@@ -36,13 +36,17 @@ O último processo do *Workflow* é [um Job](/etl-jobs/load_redshift.py) que cri
 
 As dimensões do modelo são o *time*, *date*, *customer*, *location*, *product* e *seller* e as tabelas são criadas pelo Job, caso não existam. O último passo do Job é transferir os dados da estrutura relacional da camada *trusted* para a estrutura dimensional da camada *trusted*.
 
-### 3. Subir o data pipeline
+### 3. Provisionando e executando o pipeline
 
 Para provisionar os recursos necessários para o data pipeline na nuvem da AWS é necessário seguir os seguintes passos:
  - No serviço VPC, criar um Endpoint para o serviço Amazon S3, informando a VPC e a Route Table que realiza as rotas das subnets contidas na VPC;
  - Criar ou utilizar um *bucket* existente do S3 para armazenamento dos scripts necessários para rodar o pipeline;
- - Executar o script [build-deploy.sh](build-deploy.sh) informando o *bucket* dos scripts, uma subnet da VPC padrão, o *Security Group* padrão e uma *Availability Zone*. Exemplo:
+ - Executar o script [build-deploy.sh](build-deploy.sh) informando o *bucket* dos scripts, uma subnet da VPC padrão, o *Security Group* padrão e uma *Availability Zone*. Esse script já irá executar o *pipeline*. Exemplo:
  
 ```$ bash build-deploy.sh olist-challenge-deployments subnet-xxxxxxxx sg-xxxxxxxx us-east-1a```
 
 > O pipeline só está disponível para a região North Virginia (us-east-1)
+
+### 4. Removendo os recursos na AWS
+
+Para remover os recursos provisionados para executar o script [clear-resources.sh](clear-resources.sh).
